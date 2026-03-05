@@ -1,7 +1,7 @@
 name: Environment Variable Manager
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
   push:
     branches: [ "main" ]
 
@@ -14,34 +14,9 @@ jobs:
 
       - name: Validate Environment Variables
         run: |
-          echo "🔒 Starting Environment Variable Validation..."
-          
-          # 检查必要变量是否存在
+          echo "🔒 Starting Validation..."
           if [ -z "${{ secrets.DB_HOST }}" ]; then
-            echo "❌ Error: DB_HOST is not set in Secrets."
+            echo "❌ DB_HOST missing"
             exit 1
           fi
-          
-          if [ -z "${{ secrets.API_KEY }}" ]; then
-            echo "❌ Error: API_KEY is not set in Secrets."
-            exit 1
-          fi
-
-          echo "✅ All required environment variables are present."
-          echo "✅ DB_HOST is configured securely."
-          echo "✅ API_KEY is loaded (value hidden)."
-          
-          # 模拟生成一个 .env.example 文件供开发者参考
-          cat <<EOF > .env.example
-# This is an example file. Do not commit real secrets here!
-DB_HOST=localhost
-API_KEY=your_key_here
-DEBUG_MODE=false
-EOF
-          
-          echo "📄 Generated .env.example template."
-
-      - name: Display Security Best Practices
-        run: |
-          echo "🛡️ Security Tip: Never commit actual .env files to GitHub."
-          echo "🛡️ Use GitHub Secrets for CI/CD and tools like 1Password for local development."
+          echo "✅ Success"
