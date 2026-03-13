@@ -23,4 +23,4 @@ jobs:
       - name: Show Version Info
         run: |
           echo "🚀 Env Manager Lite Version: 0.1.1"
-          echo "📅 Build Time: $(date)"
+          echo "📅 Build Time: $(date)" 
