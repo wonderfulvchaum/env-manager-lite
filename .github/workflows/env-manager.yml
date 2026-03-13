@@ -20,3 +20,7 @@ jobs:
             exit 1
           fi
           echo "✅ Success"
+      - name: Show Version Info
+        run: |
+          echo "🚀 Env Manager Lite Version: 0.1.1"
+          echo "📅 Build Time: $(date)"
