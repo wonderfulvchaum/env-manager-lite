@@ -1,34 +1,78 @@
 name: Environment Variable Manager
 
 on:
-  workflow_dispatch:
   push:
+    branches: [ "main", "feature/*" ]
+  pull_request:
     branches: [ "main" ]
+  workflow_dispatch: # 允许手动触发
 
 jobs:
   manage-env:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Check Required Secrets
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          echo "🔍 Checking environment variables..."
+          if [ -z "$DB_HOST" ]; then
+            echo "❌ Error: DB_HOST is not set!"
+            exit 1
+          fi
+          if [ -z "$API_KEY" ]; then
+            echo "❌ Error: API_KEY is not set!"
+            exit 1
+          fi
+          echo "✅ All required variables are present."
+          
+          # 生成示例文件
+          echo "DB_HOST=localhost" > .env.example
+          echo "API_KEY=your_key_here" >> .env.example
+          echo "📄 Generated .env.example:"
+          cat .env.example
+
+      # --- Bash 原生检查 (可选，如果之前有保留) ---
+      - name: Run Bash Validation (Optional)
+        run: |
+          if [ -f "examples/validate.sh" ]; then
+            chmod +x examples/validate.sh
+            ./examples/validate.sh
+          else
+            echo "⚠️ Bash script not found, skipping."
+          fi
+
+      # --- Python 支持 ---
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-    
+
       - name: Run Python Validation
         run: |
           echo "🐍 Running Python validator..."
-          python examples/validate.py
-      - name: Validate Environment Variables
-        run: |
-          echo "🔒 Starting Validation..."
-          if [ -z "${{ secrets.DB_HOST }}" ]; then
-            echo "❌ DB_HOST missing"
-            exit 1
+          if [ -f "examples/validate.py" ]; then
+            python examples/validate.py
+          else
+            echo "⚠️ Python script not found, skipping."
           fi
-          echo "✅ Success"
-      - name: Show Version Info
+
+      # --- Node.js 支持 (今天新增的部分) ---
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Node.js Validation
         run: |
-          echo "🚀 Env Manager Lite Version: 0.1.1"
-          echo "📅 Build Time: $(date)" 
+          echo "🟨 Running Node.js validator..."
+          if [ -f "examples/validate.js" ]; then
+            node examples/validate.js
+          else
+            echo "⚠️ Node.js script not found, skipping."
+          fi
