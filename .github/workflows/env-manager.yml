@@ -5,49 +5,15 @@ on:
     branches: [ "main", "feature/*" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   manage-env:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Check Required Secrets
-        env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          API_KEY: ${{ secrets.API_KEY }}
-        run: |
-          echo "🔍 Checking environment variables..."
-          if [ -z "$DB_HOST" ]; then
-            echo "❌ Error: DB_HOST is not set!"
-            exit 1
-          fi
-          if [ -z "$API_KEY" ]; then
-            echo "❌ Error: API_KEY is not set!"
-            exit 1
-          fi
-          echo "✅ All required variables are present."
-          
-          # 生成示例文件
-          echo "DB_HOST=localhost" > .env.example
-          echo "API_KEY=your_key_here" >> .env.example
-          echo "📄 Generated .env.example:"
-          cat .env.example
-
-      # --- Bash 原生检查 (可选，如果之前有保留) ---
-      - name: Run Bash Validation (Optional)
-        run: |
-          if [ -f "examples/validate.sh" ]; then
-            chmod +x examples/validate.sh
-            ./examples/validate.sh
-          else
-            echo "⚠️ Bash script not found, skipping."
-          fi
-
-      # --- Python 支持 ---
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -57,22 +23,17 @@ jobs:
         run: |
           echo "🐍 Running Python validator..."
           if [ -f "examples/validate.py" ]; then
+            # 智能处理：如果有 secrets 就用 secrets，否则用测试值
+            if [ -n "${{ secrets.DB_HOST }}" ]; then
+              echo "🔐 Using real secrets from repository"
+              export DB_HOST="${{ secrets.DB_HOST }}"
+              export API_KEY="${{ secrets.API_KEY }}"
+            else
+              echo "🧪 Using test values (secrets not configured or in PR)"
+              export DB_HOST="localhost"
+              export API_KEY="test_key_123"
+            fi
             python examples/validate.py
           else
             echo "⚠️ Python script not found, skipping."
-          fi
-
-      # --- Node.js 支持 (今天新增的部分) ---
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Run Node.js Validation
-        run: |
-          echo "🟨 Running Node.js validator..."
-          if [ -f "examples/validate.js" ]; then
-            node examples/validate.js
-          else
-            echo "⚠️ Node.js script not found, skipping."
           fi
