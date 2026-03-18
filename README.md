@@ -1,6 +1,6 @@
 # 🛡️ Env Manager Lite
 
-[![CI Status](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME/actions/workflows/env-manager.yml/badge.svg)](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME/actions/workflows/env-manager.yml)
+[![CI Status](https://github.com/wonderfulvchaum/env-manager-lite/actions/workflows/env-manager.yml/badge.svg)](https://github.com/wonderfulvchaum/env-manager-lite/actions/workflows/env-manager.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > 一个轻量级的跨语言环境变量验证工具，专为 GitHub Actions CI/CD 流程设计。确保你的应用在部署前拥有所有必需的环境变量。
@@ -126,5 +126,3 @@ node examples/validate.js
 
 本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
 
-
-如果预览中还有任何格式问题，请截图发给我，我会立即针对性修复！
