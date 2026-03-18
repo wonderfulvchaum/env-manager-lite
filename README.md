@@ -44,69 +44,59 @@ export API_KEY=secret123
 # 运行验证
 chmod +x examples/validate.sh
 ./examples/validate.sh
-🐍 Python
+```
+
+### 🐍 Python
 适用于 Python 开发者，包含更详细的错误处理。
-前置要求: Python 3.x
-bash
 
-编辑
+**前置要求**: Python 3.x
 
-
-
+```bash
 # 设置变量 (Linux/Mac)
 export DB_HOST=localhost
 export API_KEY=secret123
 
 # 设置变量 (Windows PowerShell)
- $ env:DB_HOST="localhost"
- $ env:API_KEY="secret123"
+$env:DB_HOST="localhost"
+$env:API_KEY="secret123"
 
 # 运行验证
 python examples/validate.py
-输出示例:
-text
+```
 
-编辑
-
-
-
+**输出示例**:
+```text
 🐍 Python Environment Validator Started...
 ✅ Found: DB_HOST
 ✅ Found: API_KEY
 🎉 Success: All required variables are present!
-🟨 Node.js
+```
+
+### 🟨 Node.js
 适用于 JavaScript/TypeScript 项目。
-前置要求: Node.js 14+
-bash
 
-编辑
+**前置要求**: Node.js 14+
 
-
-
+```bash
 # 设置变量 (Linux/Mac)
 export DB_HOST=localhost
 export API_KEY=secret123
 
 # 运行验证
 node examples/validate.js
-输出示例:
-text
+```
 
-编辑
-
-
-
+**输出示例**:
+```text
 🟨 Node.js Environment Validator Started...
 ✅ Found: DB_HOST
 ✅ Found: API_KEY
 🎉 Success: All variables present!
-📂 项目结构
-text
+```
 
-编辑
+## 📂 项目结构
 
-
-
+```text
 .
 ├── .github
 │   └── workflows
@@ -118,13 +108,23 @@ text
 ├── .env.example                 # 环境变量模板
 ├── CONTRIBUTING.md              # 贡献指南
 └── README.md                    # 项目说明
-🗺️ 路线图
-基础 CI/CD 工作流
-多语言支持 (Bash, Python, Node.js)
-Docker 容器化支持 (Coming Soon)
-支持自定义变量规则文件
-集成 Slack/Discord 通知
-🤝 贡献
-欢迎提交 Issue 和 Pull Request！请参阅 CONTRIBUTING.md 了解如何开始。
-📄 许可证
-本项目采用 MIT 许可证 - 查看 LICENSE 文件了解详情。
+```
+
+## 🗺️ 路线图
+
+- [x] 基础 CI/CD 工作流
+- [x] 多语言支持 (Bash, Python, Node.js)
+- [ ] Docker 容器化支持 (Coming Soon)
+- [ ] 支持自定义变量规则文件
+- [ ] 集成 Slack/Discord 通知
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 了解如何开始。
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+
+
+如果预览中还有任何格式问题，请截图发给我，我会立即针对性修复！
