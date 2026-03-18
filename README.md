@@ -1,35 +1,30 @@
-# Env Manager Lite 🔐
+# 🛡️ Env Manager Lite
 
-一个基于 GitHub Actions 的轻量级环境变量管理演示项目。旨在帮助开源开发者理解如何安全地处理敏感配置信息，避免硬编码密码。
+[![CI Status](https://github.com/wonderfulvchaum/env-manager-lite/actions/workflows/env-manager.yml/badge.svg)](https://github.com/wonderfulvchaum/env-manager-lite/actions/workflows/env-manager.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/wonderfulvchaum/env-manager-lite/releases)
 
-## 🚀 功能特点
+> 一个轻量级的跨语言环境变量验证工具，专为 GitHub Actions 和本地开发设计。确保你的应用在部署前拥有所有必需的环境变量。
 
-- **安全存储**: 利用 GitHub Secrets 存储敏感数据。
-- **自动验证**: 通过 CI/CD 流程自动检查必要的环境变量是否配置。
-- **模板生成**: 自动生成 `.env.example` 文件，方便团队成员协作。
-- **零依赖**: 无需安装额外软件，直接在 GitHub 网页端运行。
+## ✨ 特性
 
-## 🛠️ 如何使用
+- 🚀 **零依赖**：无需安装额外软件，原生支持 Bash。
+- 🐍 **多语言支持**：提供 Python 和 Node.js 验证脚本示例。
+- 🔄 **CI/CD 集成**：自动在 GitHub Actions 中运行验证，防止配置错误导致部署失败。
+- 📝 **自动生成**：自动创建 `.env.example` 模板供团队成员参考。
+- 🛡️ **安全优先**：基于 GitHub Secrets 管理敏感信息，不硬编码。
 
-### 1. 配置 Secrets
-前往本仓库的 **Settings** -> **Secrets and variables** -> **Actions**，添加以下 New repository secrets：
+## 🚀 快速开始
+
+### 1. 配置 GitHub Secrets
+在你的仓库设置中 (`Settings` > `Secrets and variables` > `Actions`) 添加以下变量：
 - `DB_HOST`: 你的数据库地址
 - `API_KEY`: 你的 API 密钥
 
-### 2. 运行工作流
-- 进入 **Actions** 标签页。
-- 选择 **Environment Variable Manager**。
-- 点击 **Run workflow** 按钮。
+### 2. 本地验证 (可选)
+如果你想在提交代码前在本地检查环境变量，可以使用我们提供的脚本。
 
-### 3. 查看结果
-工作流将验证你的 Secret 是否存在，并生成标准的 `.env.example` 文件结构。
-
-## 🤝 为什么需要 1Password?
-
-虽然 GitHub Secrets 适合 CI/CD，但在本地开发环境中，开发者仍然需要安全地共享和同步这些变量。本项目推荐配合 **1Password** 使用：
-- 在团队间安全共享 `.env` 文件内容。 
-- 自动填充本地开发环境。
-- 审计谁在何时访问了哪些密钥。
-
-## 📜 License
-MIT License
+#### 🐚 Bash (Linux/Mac)
+```bash
+chmod +x examples/validate.sh
+./examples/validate.sh
