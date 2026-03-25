@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  validator:
+    build: .
+    environment:
+      - DB_HOST=host.docker.internal # Or specific IP
+      - API_KEY=demo_key_123
+    # For local test, we override command to show help or run specific check
+    command: python 
+    # In real usage, users would map their own env vars
