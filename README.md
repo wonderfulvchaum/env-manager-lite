@@ -15,6 +15,26 @@
 
 ## 🛠️ 快速开始
 
+### 🐳 Docker Usage
+Pull the latest image:
+```bash
+docker pull ghcr.io/YOUR_USERNAME/YOUR_REPO_NAME:latest
+```
+        
+Run validation:
+```bash
+docker run --rm \
+  -e DB_HOST=localhost \
+  -e API_KEY=secret123 \
+  ghcr.io/YOUR_USERNAME/YOUR_REPO_NAME:latest python
+```
+        
+Support other languages:
+```bash
+docker run --rm -e DB_HOST=... -e API_KEY=... ghcr.io/.../...:latest node
+```
+
+
 ### 1. 配置 Secrets
 在你的 GitHub 仓库中，进入 **Settings** > **Secrets and variables** > **Actions**，添加以下变量：
 - `DB_HOST`: 你的数据库地址
