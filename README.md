@@ -14,6 +14,26 @@
 - 🔄 **自动化流程**：每次 Push 或 PR 自动运行检查，防止配置错误上线。
 
 ## 🛠️ 快速开始
+        ```markdown
+        ### 🐳 Docker Usage
+        Pull the latest image:
+        ```bash
+        docker pull ghcr.io/YOUR_USERNAME/YOUR_REPO_NAME:latest
+        ```
+        
+        Run validation:
+        ```bash
+        docker run --rm \
+          -e DB_HOST=localhost \
+          -e API_KEY=secret123 \
+          ghcr.io/YOUR_USERNAME/YOUR_REPO_NAME:latest python
+        ```
+        
+        Support other languages:
+        ```bash
+        docker run --rm -e DB_HOST=... -e API_KEY=... ghcr.io/.../...:latest node
+        ```
+        ```
 
 ### 1. 配置 Secrets
 在你的 GitHub 仓库中，进入 **Settings** > **Secrets and variables** > **Actions**，添加以下变量：
