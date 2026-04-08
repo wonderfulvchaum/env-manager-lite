@@ -1,0 +1,16 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/release-please-action@v3
+        with:
+          release-type: simple # 或者 node, python 等，simple 适合混合项目
+          package-name: env-manager-lite
+          bump-minor-pre-major: true
