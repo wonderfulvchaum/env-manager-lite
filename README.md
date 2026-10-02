@@ -31,11 +31,17 @@
 DB_HOST
 API_KEY
 
-# 可选：精确匹配值
+# 可选：精确匹配值（存在时校验）
 DB_PORT=5432
+
+# 带默认值（不存在时自动注入，存在则保留原值）
+LOG_LEVEL:info
 ```
 
-支持 `#` 注释和 `VAR=value` 语法（value 非空时校验是否匹配）。
+支持 `#` 注释和三种条目类型：
+- `VAR` — 必填，缺失即失败
+- `VAR=value` — 精确匹配，缺失或值不符均失败
+- `VAR:default` — 带默认值，缺失时自动注入
 
 ### 3. 本地验证
 
@@ -102,9 +108,11 @@ docker run --rm env-validator help
 - [x] 多语言支持 (Bash, Python, Node.js, Go, Rust)
 - [x] Docker 容器化支持
 - [x] 自定义变量规则文件 (`.env-required`)
-- [ ] 支持 `default` 默认值回退
-- [ ] 集成 Slack/Discord 通知
-- [ ] 生成 JSON/SARIF 报告供 CI 消费
+- [x] 支持 `default` 默认值回退
+- [x] JSON 报告输出（`ENV_VALIDATE_REPORT` 环境变量）
+- [x] 集成 Slack/Discord 通知（可选 secrets）
+- [ ] SARIF 报告格式
+- [ ] 规则文件继承/分层支持
 
 ## 🤝 贡献
 

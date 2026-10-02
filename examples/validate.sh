@@ -1,59 +1,65 @@
 #!/bin/bash
-# Env Manager Lite - Bash Validator
+# Env Manager Lite - Bash Validator v0.5
 #
-# .env-required 语法：
-#   纯变量名（DB_HOST）：必须存在且非空
-#   VAR=value（DB_PORT=5432）：存在则校验值匹配，不存在则跳过（可选）
+# .env-required 三种条目：
+#   VAR            必填（缺失则失败）
+#   VAR=expected   精确匹配
+#   VAR:default    带默认值（Bash 不做注入，仅报告；如未设置且无默认值则失败）
+#
+# 注意: Bash 无法像 Python/Node 那样注入默认值到当前进程，
+#       因此 VAR:default 条目在 Bash 验证器中视为"可选存在性检查"。
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 CI_MODE="Local"
-if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  CI_MODE="CI"
-fi
+[[ "${GITHUB_ACTIONS:-}" == "true" ]] && CI_MODE="CI"
 
 echo "=============================================="
-echo "  Env Manager Lite - Bash Validator"
+echo "  Env Manager Lite - Bash Validator v0.5"
 echo "  Mode: $CI_MODE"
 echo "=============================================="
 
-# 解析 .env-required
 CONFIG_FILE="$ROOT_DIR/.env-required"
-REQUIRED_VARS=()
-OPTIONAL_VARS=()   # "name=expected" 对
+
+# 解析规则: 用两个数组存 "VAR" (required) 和 "VAR=expected" / "VAR:default"
+REQUIRED_LINES=()
+MATCH_LINES=()
+DEFAULT_LINES=()
 
 if [[ -f "$CONFIG_FILE" ]]; then
   while IFS= read -r line; do
     line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [[ -z "$line" || "$line" =~ ^# ]] && continue
-    if [[ "$line" == *=* ]]; then
-      OPTIONAL_VARS+=("$line")
+    if [[ "$line" == *:* ]]; then
+      DEFAULT_LINES+=("$line")
+    elif [[ "$line" == *=* ]]; then
+      MATCH_LINES+=("$line")
     else
-      REQUIRED_VARS+=("$line")
+      REQUIRED_LINES+=("$line")
     fi
   done < "$CONFIG_FILE"
 fi
 
-# 默认值
-if [[ ${#REQUIRED_VARS[@]} -eq 0 && ${#OPTIONAL_VARS[@]} -eq 0 ]]; then
-  REQUIRED_VARS=("DB_HOST" "API_KEY")
+TOTAL=$(( ${#REQUIRED_LINES[@]} + ${#MATCH_LINES[@]} + ${#DEFAULT_LINES[@]} ))
+if [[ $TOTAL -eq 0 ]]; then
+  REQUIRED_LINES=("DB_HOST" "API_KEY")
 fi
 
-echo "  Checking ${#REQUIRED_VARS[@]} required + ${#OPTIONAL_VARS[@]} optional..."
+echo "  Checking ${#REQUIRED_LINES[@]} required, ${#MATCH_LINES[@]} match, ${#DEFAULT_LINES[@]} default..."
 echo ""
 
-MISSING=()
-MISMATCH=()
+ERRORS=0
 
-# 检查必填
-for var in "${REQUIRED_VARS[@]}"; do
+# 必填
+for var in "${REQUIRED_LINES[@]:-}"; do
+  [[ -z "$var" ]] && continue
   val="${!var:-}"
   if [[ -z "$val" ]]; then
-    MISSING+=("$var")
     echo "  ✗ Missing: $var"
+    ERRORS=$((ERRORS + 1))
   else
     display="${val:0:4}..."
     [[ ${#val} -le 8 ]] && display="$val"
@@ -61,27 +67,39 @@ for var in "${REQUIRED_VARS[@]}"; do
   fi
 done
 
-# 检查可选
-for pair in "${OPTIONAL_VARS[@]}"; do
+# 精确匹配
+for pair in "${MATCH_LINES[@]:-}"; do
+  [[ -z "$pair" ]] && continue
   var="${pair%%=*}"
   expected="${pair#*=}"
   val="${!var:-}"
   if [[ -z "$val" ]]; then
-    echo "  ○ Optional: $var (not set)"
+    echo "  ✗ Missing: $var (required)"
+    ERRORS=$((ERRORS + 1))
   elif [[ "$val" != "$expected" ]]; then
-    MISMATCH+=("$var")
     echo "  ✗ Mismatch: $var (expected '$expected', got '$val')"
+    ERRORS=$((ERRORS + 1))
   else
     echo "  ✓ Match: $var = $val"
   fi
 done
 
+# 默认值（Bash: 仅报告，不注入）
+for pair in "${DEFAULT_LINES[@]:-}"; do
+  [[ -z "$pair" ]] && continue
+  var="${pair%%:*}"
+  default_val="${pair#*:}"
+  val="${!var:-}"
+  if [[ -z "$val" ]]; then
+    echo "  ○ Optional: $var (not set, default: $default_val)"
+  else
+    echo "  ✓ Found: $var = $val"
+  fi
+done
+
 echo ""
-TOTAL=$(( ${#MISSING[@]} + ${#MISMATCH[@]} ))
-if [[ $TOTAL -gt 0 ]]; then
-  echo "  ✗ Failed: $TOTAL issue(s)."
-  [[ ${#MISSING[@]} -gt 0 ]] && echo "    Missing: ${MISSING[*]}"
-  [[ ${#MISMATCH[@]} -gt 0 ]] && echo "    Mismatch: ${MISMATCH[*]}"
+if [[ $ERRORS -gt 0 ]]; then
+  echo "  ✗ Failed: $ERRORS issue(s)."
   exit 1
 else
   echo "  ✓ All checks passed!"

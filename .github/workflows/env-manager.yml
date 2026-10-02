@@ -25,24 +25,61 @@ jobs:
           node-version: '20'
 
       - name: Run Multi-Language Validation
+        env:
+          ENV_VALIDATE_REPORT: ${{ github.workspace }}/env-report.json
         run: |
-          echo "🐍 Running Python validator..."
           if [ -n "${{ secrets.DB_HOST }}" ]; then
-            echo "🔐 Using real secrets from repository"
+            echo "🔐 Using real secrets"
             export DB_HOST="${{ secrets.DB_HOST }}"
-            export API_KEY="${{ secrets.API_KEY }}"
+            export API_KEY=*** secrets.API_KEY }}"
           else
             echo "🧪 Using test values (secrets not configured or in PR)"
             export DB_HOST="localhost"
-            export API_KEY="test_key_123"
+            export API_KEY="test..."
           fi
+
+          echo "🐍 Python validator..."
           python examples/validate.py
-          echo ""
-          echo "🟨 Running Node.js validator..."
+          python_exit=$?
+
+          echo "🟨 Node.js validator..."
           node examples/validate.js
-          echo ""
-          echo "🐚 Running Bash validator..."
+          node_exit=$?
+
+          echo "🐚 Bash validator..."
           bash examples/validate.sh
+          bash_exit=$?
+
+          echo "📄 JSON Report:"
+          cat env-report.json || true
+
+          # 任何验证器失败则整体失败
+          if [ $python_exit -ne 0 ] || [ $node_exit -ne 0 ] || [ $bash_exit -ne 0 ]; then
+            echo "❌ Validation failed"
+            exit 1
+          fi
+
+      - name: Notify Slack (optional)
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          STATUS="❌ Failed"
+          [ ${{ job.status }} == 'success' ] && STATUS="✅ Passed"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text": \"Env Validation ${STATUS} - ${GITHUB_REPOSITORY} @ ${GITHUB_REF_NAME}\"}"
+
+      - name: Notify Discord (optional)
+        if: always() && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          STATUS="failed"
+          [ ${{ job.status }} == 'success' ] && STATUS="success"
+          curl -s -X POST "$DISCORD_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -d "{\"content\": \"Env Validation ${STATUS} - ${GITHUB_REPOSITORY} @ ${GITHUB_REF_NAME}\"}"
 
   build-and-push:
     needs: manage-env
