@@ -7,7 +7,9 @@ Env Manager Lite - Python Validator
   3. VAR:default    → 带默认值，不存在时注入 default 后通过；存在则保留原值
      若 default 为空字符串（VAR:），则仅做"存在性检查"（不强制非空）
 
-CI 报告：设置 ENV_VALIDATE_REPORT=/path/to/report.json 后自动输出 JSON。
+CI 报告：
+  - ENV_VALIDATE_REPORT=/path/to/report.json  → JSON 报告
+  - ENV_VALIDATE_SARIF=/path/to/report.sarif  → SARIF 报告（GitHub Code Scanning）
 """
 
 import os
@@ -134,6 +136,89 @@ def write_report(rules, results, errors, is_ci):
     print(f"  📄 Report written to: {report_path}")
 
 
+def write_sarif(results, errors):
+    """生成 SARIF 2.1.0 报告（GitHub Code Scanning 集成）。"""
+    sarif_path = os.environ.get("ENV_VALIDATE_SARIF", "")
+    if not sarif_path:
+        return
+
+    runs = []
+    if errors:
+        rule_ids = []
+        for e in errors:
+            rule_id = "env-missing" if e["issue"] == "missing" else "env-mismatch"
+            if rule_id not in rule_ids:
+                rule_ids.append(rule_id)
+
+        rules = [
+            {
+                "id": "env-missing",
+                "name": "EnvironmentVariableMissing",
+                "shortDescription": {"text": "Required environment variable is missing"},
+                "defaultConfiguration": {"level": "error"},
+            },
+            {
+                "id": "env-mismatch",
+                "name": "EnvironmentVariableMismatch",
+                "shortDescription": {"text": "Environment variable value does not match expected"},
+                "defaultConfiguration": {"level": "error"},
+            },
+        ]
+
+        sarif_errors = []
+        for e in errors:
+            rule_id = "env-missing" if e["issue"] == "missing" else "env-mismatch"
+            msg = f"Environment variable '{e['var']}' is missing"
+            if e["issue"] == "mismatch":
+                msg = f"Environment variable '{e['var']}' expected '{e.get('expected', '')}' but got '{e.get('got', '')}'"
+            sarif_errors.append(
+                {
+                    "ruleId": rule_id,
+                    "message": {"text": msg},
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": ".env-required",
+                                    "index": 0,
+                                },
+                                "region": {"startLine": 1},
+                            }
+                        }
+                    ],
+                }
+            )
+
+        runs.append(
+            {
+                "tool": {
+                    "driver": {
+                        "name": "env-manager-lite",
+                        "version": "0.6.0",
+                        "informationUri": "https://github.com/wonderfulvchaum/env-manager-lite",
+                        "rules": rules,
+                    }
+                },
+                "results": sarif_errors,
+            }
+        )
+
+    sarif = {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": runs,
+    }
+
+    sarif_dir = os.path.dirname(sarif_path)
+    if sarif_dir:
+        os.makedirs(sarif_dir, exist_ok=True)
+
+    with open(sarif_path, "w", encoding="utf-8") as f:
+        json.dump(sarif, f, indent=2, ensure_ascii=False)
+
+    print(f"  📄 SARIF report written to: {sarif_path}")
+
+
 def main():
     is_ci = os.environ.get("GITHUB_ACTIONS", "").lower() == "true" or "--ci" in sys.argv
 
@@ -156,6 +241,7 @@ def main():
 
     results, errors = validate(rules)
     write_report(rules, results, errors, is_ci)
+    write_sarif(results, errors)
 
     print()
     if errors:

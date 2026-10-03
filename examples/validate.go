@@ -1,106 +1,263 @@
 //go:build ignore
 // +build ignore
 
-// Env Manager Lite - Go Validator
+// Env Manager Lite - Go Validator v0.6
+// 支持三种规则类型: required / match / default
+// JSON 报告: 设置 ENV_VALIDATE_REPORT 后生成
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
+type Rule struct {
+	Type     string `json:"type"`
+	Expected string `json:"expected,omitempty"`
+	Default  string `json:"default,omitempty"`
+}
+
+type RuleResult struct {
+	Var    string `json:"var"`
+	Status string `json:"status"`
+	Value  string `json:"value,omitempty"`
+}
+
+type RuleError struct {
+	Var      string `json:"var"`
+	Issue    string `json:"issue"`
+	Expected string `json:"expected,omitempty"`
+	Got      string `json:"got,omitempty"`
+}
+
+type Report struct {
+	Tool        string     `json:"tool"`
+	Version     string     `json:"version"`
+	Mode        string     `json:"mode"`
+	Passed      bool       `json:"passed"`
+	Total       int        `json:"total"`
+	PassedCount int        `json:"passed_count"`
+	FailedCount int        `json:"failed_count"`
+	Results     []RuleResult `json:"results"`
+	Errors      []RuleError  `json:"errors"`
+}
+
 func main() {
-	required := []string{"DB_HOST", "API_KEY"}
-
-	// 尝试从 .env-required 读取
-	if data, err := os.ReadFile(".env-required"); err == nil {
-		required = parseEnvRequired(string(data))
+	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
+	mode := "local"
+	if isCI {
+		mode = "ci"
 	}
 
 	fmt.Println("==============================================")
-	fmt.Println("  Env Manager Lite - Go Validator")
+	fmt.Println("  Env Manager Lite - Go Validator v0.6")
+	fmt.Printf("  Mode: %s\n", strings.ToUpper(mode))
 	fmt.Println("==============================================")
-	fmt.Printf("  Checking %d variable(s)...\n\n", len(required))
 
-	missing := []string{}
-	for _, v := range required {
-		val := os.Getenv(v)
-		if val == "" {
-			missing = append(missing, v)
-			fmt.Printf("  ✗ Missing: %s\n", v)
-		} else {
-			display := val
-			if len(val) > 8 {
-				display = val[:4] + "..."
-			}
-			fmt.Printf("  ✓ Found: %s = %s\n", v, display)
-		}
+	rules := loadRules()
+	typeCounts := map[string]int{}
+	for _, r := range rules {
+		typeCounts[r.Type]++
 	}
+	fmt.Printf("  Checking %d rule(s): %d required, %d match, %d default...\n\n",
+		len(rules), typeCounts["required"], typeCounts["match"], typeCounts["default"])
+
+	results, errors := validate(rules)
+	writeReport(rules, results, errors, mode)
 
 	fmt.Println()
-	if len(missing) > 0 {
-		fmt.Printf("  ✗ Failed: %d variable(s) missing.\n", len(missing))
-		for _, m := range missing {
-			fmt.Printf("    - %s\n", m)
+	if len(errors) > 0 {
+		fmt.Printf("  ✗ Failed: %d issue(s).\n", len(errors))
+		var missing, mismatched []string
+		for _, e := range errors {
+			if e.Issue == "missing" {
+				missing = append(missing, e.Var)
+			} else {
+				mismatched = append(mismatched, e.Var)
+			}
+		}
+		if len(missing) > 0 {
+			fmt.Printf("    Missing: %s\n", strings.Join(missing, ", "))
+		}
+		if len(mismatched) > 0 {
+			fmt.Printf("    Mismatch: %s\n", strings.Join(mismatched, ", "))
 		}
 		os.Exit(1)
-	} else {
-		fmt.Println("  ✓ All required variables present!")
 	}
+	fmt.Println("  ✓ All checks passed!")
 }
 
-func parseEnvRequired(content string) []string {
-	var vars []string
-	for _, line := range splitLines(content) {
-		line = trimSpace(line)
-		if line == "" || hasPrefix(line, "#") {
+// loadRules 解析 .env-required（项目根目录）
+// VAR           → required
+// VAR=expected  → match
+// VAR:default   → default（无 = 时）
+func loadRules() map[string]Rule {
+	root := findRoot()
+	path := root + "/.env-required"
+
+	defaults := map[string]Rule{
+		"DB_HOST": {Type: "required"},
+		"API_KEY": {Type: "required"},
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return defaults
+	}
+
+	rules := map[string]Rule{}
+	lines := strings.Split(string(data), "\n")
+	found := false
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// 支持 VAR=value 语法
-		if idx := indexByte(line, '='); idx > 0 {
-			vars = append(vars, trimSpace(line[:idx]))
+		found = true
+
+		// 优先级: 有 : 且无 = → default; 有 = → match; 否则 → required
+		if strings.Contains(line, ":") && !strings.Contains(line, "=") {
+			parts := strings.SplitN(line, ":", 2)
+			vars := strings.TrimSpace(parts[0])
+			if vars != "" {
+				rules[vars] = Rule{Type: "default", Default: strings.TrimSpace(parts[1])}
+			}
+		} else if strings.Contains(line, "=") {
+			parts := strings.SplitN(line, "=", 2)
+			vars := strings.TrimSpace(parts[0])
+			if vars != "" {
+				rules[vars] = Rule{Type: "match", Expected: strings.TrimSpace(parts[1])}
+			}
 		} else {
-			vars = append(vars, line)
+			if line != "" {
+				rules[line] = Rule{Type: "required"}
+			}
 		}
 	}
-	if len(vars) == 0 {
-		return []string{"DB_HOST", "API_KEY"}
+
+	if !found {
+		return defaults
 	}
-	return vars
+	return rules
 }
 
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' || s[i] == '\r' {
-			lines = append(lines, s[start:i])
-			start = i + 1
+func validate(rules map[string]Rule) ([]RuleResult, []RuleError) {
+	var results []RuleResult
+	var errors []RuleError
+
+	// 稳定顺序: 按 map 迭代（Go 1.12+ map 迭代顺序随机，用切片排序）
+	keys := make([]string, 0, len(rules))
+	for k := range rules {
+		keys = append(keys, k)
+	}
+	// 简单排序保持输出稳定
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[i] > keys[j] {
+				keys[i], keys[j] = keys[j], keys[i]
+			}
 		}
 	}
-	lines = append(lines, s[start:])
-	return lines
-}
 
-func trimSpace(s string) string {
-	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t') {
-		s = s[1:]
-	}
-	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
-		s = s[:len(s)-1]
-	}
-	return s
-}
+	for _, varName := range keys {
+		spec := rules[varName]
+		current := os.Getenv(varName)
 
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
+		switch spec.Type {
+		case "default":
+			if current == "" {
+				// 注入默认值
+				os.Setenv(varName, spec.Default)
+				current = spec.Default
+				results = append(results, RuleResult{Var: varName, Status: "defaulted", Value: current})
+				fmt.Printf("  ◑ Defaulted: %s = %s\n", varName, current)
+			} else {
+				results = append(results, RuleResult{Var: varName, Status: "ok", Value: current})
+				fmt.Printf("  ✓ Found: %s = %s\n", varName, mask(current))
+			}
 
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
+		case "match":
+			if current == "" {
+				errors = append(errors, RuleError{Var: varName, Issue: "missing"})
+				results = append(results, RuleResult{Var: varName, Status: "missing"})
+				fmt.Printf("  ✗ Missing: %s (required)\n", varName)
+			} else if current != spec.Expected {
+				errors = append(errors, RuleError{Var: varName, Issue: "mismatch", Expected: spec.Expected, Got: current})
+				results = append(results, RuleResult{Var: varName, Status: "mismatch"})
+				fmt.Printf("  ✗ Mismatch: %s (expected '%s', got '%s')\n", varName, spec.Expected, current)
+			} else {
+				results = append(results, RuleResult{Var: varName, Status: "ok", Value: current})
+				fmt.Printf("  ✓ Match: %s = %s\n", varName, current)
+			}
+
+		default: // required
+			if current == "" {
+				errors = append(errors, RuleError{Var: varName, Issue: "missing"})
+				results = append(results, RuleResult{Var: varName, Status: "missing"})
+				fmt.Printf("  ✗ Missing: %s\n", varName)
+			} else {
+				results = append(results, RuleResult{Var: varName, Status: "ok", Value: current})
+				fmt.Printf("  ✓ Found: %s = %s\n", varName, mask(current))
+			}
 		}
 	}
-	return -1
+
+	return results, errors
+}
+
+func writeReport(rules map[string]Rule, results []RuleResult, errors []RuleError, mode string) {
+	reportPath := os.Getenv("ENV_VALIDATE_REPORT")
+	if reportPath == "" {
+		return
+	}
+
+	passed := len(errors) == 0
+	report := Report{
+		Tool:        "env-manager-lite",
+		Version:     "0.6.0",
+		Mode:        mode,
+		Passed:      passed,
+		Total:       len(results),
+		PassedCount: len(results) - len(errors),
+		FailedCount: len(errors),
+		Results:     results,
+		Errors:      errors,
+	}
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(reportPath, data, 0644); err == nil {
+		fmt.Printf("  📄 Report written to: %s\n", reportPath)
+	}
+}
+
+func mask(v string) string {
+	if len(v) > 8 {
+		return v[:4] + "..."
+	}
+	return v
+}
+
+func findRoot() string {
+	// 向上查找 .env-required 或 git 目录
+	dir, _ := os.Getwd()
+	for i := 0; i < 5; i++ {
+		if _, err := os.Stat(dir + "/.env-required"); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(dir + "/.git"); err == nil {
+			return dir
+		}
+		parent := dir + "/.."
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "."
 }

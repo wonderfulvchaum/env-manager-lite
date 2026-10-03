@@ -48,12 +48,16 @@ LOG_LEVEL:info
 ```bash
 # 设置变量
 export DB_HOST=localhost
-export API_KEY=secret123
+export API_KEY=***
 
 # 运行任一验证器
 python examples/validate.py
 node examples/validate.js
 bash examples/validate.sh
+go run examples/validate.go
+
+# 或使用 CLI 自动检测（依次执行所有可用验证器）
+python scripts/env-validate.py
 ```
 
 ### 4. CI 自动运行
@@ -94,6 +98,8 @@ docker run --rm env-validator help
 │   ├── validate.sh         # Bash 验证器
 │   ├── validate.go         # Go 验证器
 │   └── validate.rs         # Rust 验证器
+├── scripts/
+│   └── env-validate.py    # CLI 入口（多语言自动检测）
 ├── .env-required           # 验证规则配置
 ├── .env.example            # 环境变量模板
 ├── Dockerfile              # 多语言运行时容器
@@ -111,7 +117,8 @@ docker run --rm env-validator help
 - [x] 支持 `default` 默认值回退
 - [x] JSON 报告输出（`ENV_VALIDATE_REPORT` 环境变量）
 - [x] 集成 Slack/Discord 通知（可选 secrets）
-- [ ] SARIF 报告格式
+- [x] SARIF 报告格式（GitHub Code Scanning 集成）
+- [x] 多语言自动检测 CLI（`scripts/env-validate.py`）
 - [ ] 规则文件继承/分层支持
 
 ## 🤝 贡献
