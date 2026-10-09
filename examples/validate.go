@@ -1,8 +1,10 @@
 //go:build ignore
 // +build ignore
 
-// Env Manager Lite - Go Validator v0.6
-// 支持三种规则类型: required / match / default
+// Env Manager Lite - Go Validator v0.7
+// 三种规则类型: required / match / default
+// 规则分层: .env-required.d/*.conf 按字母序追加/覆盖
+// .env 文件加载: ENV_VALIDATE_ENV_FILE
 // JSON 报告: 设置 ENV_VALIDATE_REPORT 后生成
 package main
 
@@ -10,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 )
 
@@ -52,9 +55,37 @@ func main() {
 	}
 
 	fmt.Println("==============================================")
-	fmt.Println("  Env Manager Lite - Go Validator v0.6")
+	fmt.Println("  Env Manager Lite - Go Validator v0.7")
 	fmt.Printf("  Mode: %s\n", strings.ToUpper(mode))
 	fmt.Println("==============================================")
+
+	// 加载 .env 文件
+	if envFile := os.Getenv("ENV_VALIDATE_ENV_FILE"); envFile != "" {
+		if data, err := os.ReadFile(envFile); err == nil {
+			imported := 0
+			for _, raw := range strings.Split(string(data), "\n") {
+				line := strings.TrimSpace(raw)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				if strings.HasPrefix(line, "export ") {
+					line = line[7:]
+				}
+				idx := strings.Index(line, "=")
+				if idx < 0 {
+					continue
+				}
+				key := strings.TrimSpace(line[:idx])
+				val := strings.TrimSpace(line[idx+1:])
+				val = strings.Trim(val, `'"`)
+				if key != "" && os.Getenv(key) == "" {
+					os.Setenv(key, val)
+					imported++
+				}
+			}
+			fmt.Printf("  📦 Loaded .env file: %s (%d variable(s) imported)\n", envFile, imported)
+		}
+	}
 
 	rules := loadRules()
 	typeCounts := map[string]int{}
@@ -89,51 +120,48 @@ func main() {
 	fmt.Println("  ✓ All checks passed!")
 }
 
-// loadRules 解析 .env-required（项目根目录）
+// loadRules 解析 .env-required + .env-required.d/*.conf（项目根目录）
 // VAR           → required
 // VAR=expected  → match
 // VAR:default   → default（无 = 时）
 func loadRules() map[string]Rule {
 	root := findRoot()
-	path := root + "/.env-required"
 
 	defaults := map[string]Rule{
 		"DB_HOST": {Type: "required"},
 		"API_KEY": {Type: "required"},
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return defaults
-	}
-
 	rules := map[string]Rule{}
-	lines := strings.Split(string(data), "\n")
 	found := false
 
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	// 主文件
+	configPath := root + "/.env-required"
+	if data, err := os.ReadFile(configPath); err == nil {
+		for _, raw := range strings.Split(string(data), "\n") {
+			if varName, rule, ok := parseRuleLine(raw); ok {
+				rules[varName] = rule
+				found = true
+			}
 		}
-		found = true
+	}
 
-		// 优先级: 有 : 且无 = → default; 有 = → match; 否则 → required
-		if strings.Contains(line, ":") && !strings.Contains(line, "=") {
-			parts := strings.SplitN(line, ":", 2)
-			vars := strings.TrimSpace(parts[0])
-			if vars != "" {
-				rules[vars] = Rule{Type: "default", Default: strings.TrimSpace(parts[1])}
+	// 分层目录
+	rulesDir := root + "/.env-required.d"
+	if dir, err := os.ReadDir(rulesDir); err == nil {
+		for _, entry := range dir {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".conf") {
+				continue
 			}
-		} else if strings.Contains(line, "=") {
-			parts := strings.SplitN(line, "=", 2)
-			vars := strings.TrimSpace(parts[0])
-			if vars != "" {
-				rules[vars] = Rule{Type: "match", Expected: strings.TrimSpace(parts[1])}
+			data, err := os.ReadFile(path.Join(rulesDir, entry.Name()))
+			if err != nil {
+				continue
 			}
-		} else {
-			if line != "" {
-				rules[line] = Rule{Type: "required"}
+			for _, raw := range strings.Split(string(data), "\n") {
+				if varName, rule, ok := parseRuleLine(raw); ok {
+					rules[varName] = rule
+					found = true
+				}
 			}
 		}
 	}
@@ -143,6 +171,41 @@ func loadRules() map[string]Rule {
 	}
 	return rules
 }
+
+// parseRuleLine 解析单行，成功时返回 true
+func parseRuleLine(raw string) (string, Rule, bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", Rule{}, false
+	}
+	// 优先级: 有 : 且无 = → default; 有 = → match; 否则 → required
+	if strings.Contains(line, ":") && !strings.Contains(line, "=") {
+		parts := strings.SplitN(line, ":", 2)
+		vars := strings.TrimSpace(parts[0])
+		if vars == "" {
+			return "", Rule{}, false
+		}
+		defaultVal := ""
+		if len(parts) > 1 {
+			defaultVal = strings.TrimSpace(parts[1])
+		}
+		return vars, Rule{Type: "default", Default: defaultVal}, true
+	} else if strings.Contains(line, "=") {
+		parts := strings.SplitN(line, "=", 2)
+		vars := strings.TrimSpace(parts[0])
+		if vars == "" {
+			return "", Rule{}, false
+		}
+		expected := ""
+		if len(parts) > 1 {
+			expected = strings.TrimSpace(parts[1])
+		}
+		return vars, Rule{Type: "match", Expected: expected}, true
+	} else {
+		return line, Rule{Type: "required"}, true
+	}
+}
+
 
 func validate(rules map[string]Rule) ([]RuleResult, []RuleError) {
 	var results []RuleResult
@@ -217,7 +280,7 @@ func writeReport(rules map[string]Rule, results []RuleResult, errors []RuleError
 	passed := len(errors) == 0
 	report := Report{
 		Tool:        "env-manager-lite",
-		Version:     "0.6.0",
+		Version:     "0.7.0",
 		Mode:        mode,
 		Passed:      passed,
 		Total:       len(results),

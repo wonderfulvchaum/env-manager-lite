@@ -1,52 +1,110 @@
 /**
- * Env Manager Lite - Node.js Validator v0.5
+ * Env Manager Lite - Node.js Validator v0.7
  *
  * 规则文件 .env-required 三种条目类型：
  *   VAR            → 必填，缺失则失败
  *   VAR=expected   → 精确匹配
  *   VAR:default    → 带默认值，不存在时注入
  *
- * CI 报告：设置 ENV_VALIDATE_REPORT 后输出 JSON。
+ * 规则分层（v0.7）：
+ *   .env-required.d/*.conf 按字母序追加/覆盖规则。
+ *
+ * .env 文件加载（v0.7）：
+ *   设置 ENV_VALIDATE_ENV_FILE 后自动导入 .env 文件（不覆盖已存在的变量）。
+ *
+ * CI 报告：
+ *   ENV_VALIDATE_REPORT / ENV_VALIDATE_SARIF
  */
 
 const fs = require('fs');
 const path = require('path');
 
+const VERSION = '0.7.0';
 const DEFAULT_RULES = {
   DB_HOST: { type: 'required' },
   API_KEY: { type: 'required' },
 };
 
+function parseLine(line, rules) {
+  line = line.trim();
+  if (!line || line.startsWith('#')) return;
+  if (line.includes(':') && !line.includes('=')) {
+    const [varName, defaultVal] = line.split(':');
+    if (varName.trim()) {
+      rules[varName.trim()] = { type: 'default', default: defaultVal.trim() };
+    }
+  } else if (line.includes('=')) {
+    const idx = line.indexOf('=');
+    const varName = line.slice(0, idx).trim();
+    const expectedVal = line.slice(idx + 1).trim();
+    if (varName) {
+      rules[varName] = { type: 'match', expected: expectedVal };
+    }
+  } else {
+    rules[line] = { type: 'required' };
+  }
+}
+
 function parseRules() {
   const root = path.resolve(__dirname, '..');
   const configPath = path.join(root, '.env-required');
+  const rulesDir = path.join(root, '.env-required.d');
 
-  if (!fs.existsSync(configPath)) {
-    return { ...DEFAULT_RULES };
-  }
-
-  const lines = fs.readFileSync(configPath, 'utf-8').split('\n');
   const rules = {};
   let found = false;
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    found = true;
-
-    if (line.includes(':') && !line.includes('=')) {
-      const [varName, defaultVal] = line.split(':');
-      rules[varName.trim()] = { type: 'default', default: defaultVal.trim() };
-    } else if (line.includes('=')) {
-      const [varName, expectedVal] = line.split('=');
-      rules[varName.trim()] = { type: 'match', expected: expectedVal.trim() };
-    } else {
-      rules[line] = { type: 'required' };
+  if (fs.existsSync(configPath)) {
+    const lines = fs.readFileSync(configPath, 'utf-8').split('\n');
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      found = true;
+      parseLine(line, rules);
     }
+  }
+
+  // 分层目录
+  let layerCount = 0;
+  if (fs.existsSync(rulesDir)) {
+    const files = fs
+      .readdirSync(rulesDir)
+      .filter((f) => f.endsWith('.conf'))
+      .sort();
+    for (const file of files) {
+      const content = fs.readFileSync(path.join(rulesDir, file), 'utf-8');
+      for (const rawLine of content.split('\n')) {
+        parseLine(rawLine, rules);
+      }
+      layerCount++;
+    }
+    if (layerCount > 0) found = true;
   }
 
   if (!found) return { ...DEFAULT_RULES };
   return rules;
+}
+
+function loadEnvFile(envFile) {
+  if (!envFile || !fs.existsSync(envFile)) return 0;
+  let imported = 0;
+  const lines = fs.readFileSync(envFile, 'utf-8').split('\n');
+  for (const rawLine of lines) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.slice(7);
+    const idx = line.indexOf('=');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+      value = value.slice(1, -1);
+    }
+    if (key && process.env[key] === undefined) {
+      process.env[key] = value;
+      imported++;
+    }
+  }
+  return imported;
 }
 
 function validate(rules) {
@@ -104,7 +162,7 @@ function writeReport(rules, { results, errors }, isCI) {
 
   const report = {
     tool: 'env-manager-lite',
-    version: '0.5.0',
+    version: VERSION,
     mode: isCI ? 'ci' : 'local',
     passed: errors.length === 0,
     total: results.length,
@@ -116,19 +174,94 @@ function writeReport(rules, { results, errors }, isCI) {
 
   const dir = path.dirname(reportPath);
   if (dir && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
   console.log(`  📄 Report written to: ${reportPath}`);
+}
+
+function writeSarif(results, errors) {
+  const sarifPath = process.env.ENV_VALIDATE_SARIF;
+  if (!sarifPath) return;
+
+  const runs = [];
+  if (errors.length > 0) {
+    const rulesDef = [
+      {
+        id: 'env-missing',
+        name: 'EnvironmentVariableMissing',
+        shortDescription: { text: 'Required environment variable is missing' },
+        defaultConfiguration: { level: 'error' },
+      },
+      {
+        id: 'env-mismatch',
+        name: 'EnvironmentVariableMismatch',
+        shortDescription: { text: 'Environment variable value does not match expected' },
+        defaultConfiguration: { level: 'error' },
+      },
+    ];
+
+    const sarifErrors = errors.map((e) => {
+      const ruleId = e.issue === 'missing' ? 'env-missing' : 'env-mismatch';
+      let msg;
+      if (e.issue === 'missing') {
+        msg = `Environment variable '${e.var}' is missing`;
+      } else {
+        msg = `Environment variable '${e.var}' expected '${e.expected || ''}' but got '${e.got || ''}'`;
+      }
+      return {
+        ruleId,
+        message: { text: msg },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: '.env-required', index: 0 },
+              region: { startLine: 1 },
+            },
+          },
+        ],
+      };
+    });
+
+    runs.push({
+      tool: {
+        driver: {
+          name: 'env-manager-lite',
+          version: VERSION,
+          informationUri: 'https://github.com/wonderfulvchaum/env-manager-lite',
+          rules: rulesDef,
+        },
+      },
+      results: sarifErrors,
+    });
+  }
+
+  const sarif = {
+    '$schema': 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
+    version: '2.1.0',
+    runs,
+  };
+
+  const dir = path.dirname(sarifPath);
+  if (dir && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), 'utf-8');
+  console.log(`  📄 SARIF report written to: ${sarifPath}`);
 }
 
 function main() {
   const isCI = process.env.GITHUB_ACTIONS === 'true' || process.argv.includes('--ci');
 
   console.log('==============================================');
-  console.log('  Env Manager Lite - Node.js Validator v0.5');
+  console.log(`  Env Manager Lite - Node.js Validator v${VERSION}`);
   console.log(`  Mode: ${isCI ? 'CI' : 'Local'}`);
   console.log('==============================================');
 
+  // 1. 加载 .env 文件
+  const envFile = process.env.ENV_VALIDATE_ENV_FILE;
+  if (envFile) {
+    const imported = loadEnvFile(envFile);
+    console.log(`  📦 Loaded .env file: ${envFile} (${imported} variable(s) imported)`);
+  }
+
+  // 2. 解析规则
   const rules = parseRules();
   const typeCounts = {};
   for (const spec of Object.values(rules)) {
@@ -141,8 +274,12 @@ function main() {
     `${typeCounts.default || 0} default...\n`
   );
 
+  // 3. 执行校验
   const { results, errors } = validate(rules);
+
+  // 4. 输出报告
   writeReport(rules, { results, errors }, isCI);
+  writeSarif(results, errors);
 
   console.log();
   if (errors.length > 0) {

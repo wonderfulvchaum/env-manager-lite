@@ -1,11 +1,18 @@
 """
-Env Manager Lite - Python Validator
+Env Manager Lite - Python Validator v0.7
 
 规则文件 .env-required 语法（三种条目类型）：
   1. VAR            → 必填，缺失则失败
   2. VAR=expected   → 精确匹配，不存在则失败，存在但值不同则失败
   3. VAR:default    → 带默认值，不存在时注入 default 后通过；存在则保留原值
-     若 default 为空字符串（VAR:），则仅做"存在性检查"（不强制非空）
+
+规则分层（v0.7）：
+  项目根目录的 .env-required.d/*.conf 文件按字母序追加/覆盖规则。
+  后加载的文件中的同名变量覆盖先加载的。
+
+环境变量文件加载（v0.7）：
+  设置 ENV_VALIDATE_ENV_FILE=/path/to/.env 后，验证前自动导入该文件
+  中的 KEY=VALUE 对到 os.environ（不覆盖已存在的变量）。
 
 CI 报告：
   - ENV_VALIDATE_REPORT=/path/to/report.json  → JSON 报告
@@ -15,28 +22,53 @@ CI 报告：
 import os
 import sys
 import json
+import glob
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+VERSION = "0.7.0"
 # 默认规则（.env-required 不存在时的 fallback）
 DEFAULT_RULES = {"DB_HOST": {"type": "required"}, "API_KEY": {"type": "required"}}
 
 
-def parse_rules():
-    """解析 .env-required，返回 {var: {type, expected/default}} 字典。
+def _parse_line(line, rules):
+    """解析单行规则，写入 rules 字典。返回是否解析成功。"""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return True
 
-    条目类型：
-      required  - VAR
-      match     - VAR=expected
-      default   - VAR:default
+    if ":" in line and "=" not in line:
+        var, default_val = line.split(":", 1)
+        var = var.strip()
+        if var:
+            rules[var] = {"type": "default", "default": default_val.strip()}
+    elif "=" in line:
+        var, expected_val = line.split("=", 1)
+        var = var.strip()
+        if var:
+            rules[var] = {"type": "match", "expected": expected_val.strip()}
+    else:
+        if line:
+            rules[line] = {"type": "required"}
+    return True
+
+
+def parse_rules():
+    """解析 .env-required + .env-required.d/*.conf，返回 {var: spec} 字典。
+
+    加载顺序：
+      1. .env-required（主文件）
+      2. .env-required.d/*.conf（按文件名字母序，后加载的覆盖同名变量）
     """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(root, ".env-required")
+    rules_dir = os.path.join(root, ".env-required.d")
 
     rules = {}
     found = False
 
+    # 主文件
     if os.path.isfile(config_path):
         with open(config_path, encoding="utf-8") as f:
             for line in f:
@@ -44,19 +76,52 @@ def parse_rules():
                 if not line or line.startswith("#"):
                     continue
                 found = True
-                if ":" in line and "=" not in line:
-                    var, default_val = line.split(":", 1)
-                    rules[var.strip()] = {"type": "default", "default": default_val.strip()}
-                elif "=" in line:
-                    var, expected_val = line.split("=", 1)
-                    rules[var.strip()] = {"type": "match", "expected": expected_val.strip()}
-                else:
-                    rules[line] = {"type": "required"}
+                _parse_line(line, rules)
+
+    # 分层目录
+    if os.path.isdir(rules_dir):
+        conf_files = sorted(glob.glob(os.path.join(rules_dir, "*.conf")))
+        for conf_path in conf_files:
+            with open(conf_path, encoding="utf-8") as f:
+                for line in f:
+                    _parse_line(line.strip(), rules)
+        if conf_files:
+            found = True
 
     if not found:
         rules = dict(DEFAULT_RULES)
 
-    return rules
+    return rules, rules_dir
+
+
+def load_env_file(env_file):
+    """从 .env 文件导入环境变量（不覆盖已存在的变量）。
+
+    支持 KEY=VALUE 和 export KEY=VALUE 格式，# 开头为注释。
+    返回导入的变量数量。
+    """
+    if not env_file or not os.path.isfile(env_file):
+        return 0
+
+    imported = 0
+    with open(env_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # 支持 "export KEY=VALUE" 格式
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+                imported += 1
+
+    return imported
 
 
 def validate(rules):
@@ -115,7 +180,7 @@ def write_report(rules, results, errors, is_ci):
 
     report = {
         "tool": "env-manager-lite",
-        "version": "0.5.0",
+        "version": VERSION,
         "mode": "ci" if is_ci else "local",
         "passed": len(errors) == 0,
         "total": len(results),
@@ -144,13 +209,7 @@ def write_sarif(results, errors):
 
     runs = []
     if errors:
-        rule_ids = []
-        for e in errors:
-            rule_id = "env-missing" if e["issue"] == "missing" else "env-mismatch"
-            if rule_id not in rule_ids:
-                rule_ids.append(rule_id)
-
-        rules = [
+        rules_def = [
             {
                 "id": "env-missing",
                 "name": "EnvironmentVariableMissing",
@@ -168,8 +227,9 @@ def write_sarif(results, errors):
         sarif_errors = []
         for e in errors:
             rule_id = "env-missing" if e["issue"] == "missing" else "env-mismatch"
-            msg = f"Environment variable '{e['var']}' is missing"
-            if e["issue"] == "mismatch":
+            if e["issue"] == "missing":
+                msg = f"Environment variable '{e['var']}' is missing"
+            else:
                 msg = f"Environment variable '{e['var']}' expected '{e.get('expected', '')}' but got '{e.get('got', '')}'"
             sarif_errors.append(
                 {
@@ -194,9 +254,9 @@ def write_sarif(results, errors):
                 "tool": {
                     "driver": {
                         "name": "env-manager-lite",
-                        "version": "0.6.0",
+                        "version": VERSION,
                         "informationUri": "https://github.com/wonderfulvchaum/env-manager-lite",
-                        "rules": rules,
+                        "rules": rules_def,
                     }
                 },
                 "results": sarif_errors,
@@ -223,23 +283,37 @@ def main():
     is_ci = os.environ.get("GITHUB_ACTIONS", "").lower() == "true" or "--ci" in sys.argv
 
     print("=" * 46)
-    print("  Env Manager Lite - Python Validator v0.5")
+    print(f"  Env Manager Lite - Python Validator v{VERSION}")
     print(f"  Mode: {'CI' if is_ci else 'Local'}")
     print("=" * 46)
 
-    rules = parse_rules()
+    # 1. 加载 .env 文件（如设置了 ENV_VALIDATE_ENV_FILE）
+    env_file = os.environ.get("ENV_VALIDATE_ENV_FILE", "")
+    if env_file:
+        imported = load_env_file(env_file)
+        print(f"  📦 Loaded .env file: {env_file} ({imported} variable(s) imported)")
+
+    # 2. 解析规则（主文件 + 分层目录）
+    rules, rules_dir = parse_rules()
+    layer_files = []
+    if rules_dir and os.path.isdir(rules_dir):
+        layer_files = sorted(os.listdir(rules_dir))
     types_count = {}
     for spec in rules.values():
         types_count[spec["type"]] = types_count.get(spec["type"], 0) + 1
 
+    layer_info = f" ({len(layer_files)} layer file(s) in .env-required.d)" if layer_files else ""
     print(
         f"  Checking {len(rules)} rule(s): "
         f"{types_count.get('required', 0)} required, "
         f"{types_count.get('match', 0)} match, "
-        f"{types_count.get('default', 0)} default...\n"
+        f"{types_count.get('default', 0)} default{layer_info}...\n"
     )
 
+    # 3. 执行校验
     results, errors = validate(rules)
+
+    # 4. 输出报告
     write_report(rules, results, errors, is_ci)
     write_sarif(results, errors)
 

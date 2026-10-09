@@ -3,19 +3,23 @@
 env-validate CLI — 多语言自动检测入口
 
 用法:
-  python scripts/env-validate.py [python|node|bash|go|rust|auto]
+  python scripts/env-validate.py [python|node|bash|go|rust|auto] [--env-file path] [--report path] [--sarif path]
 
 auto 模式（默认）：检测本机可用的运行时，选择第一个可用的执行验证。
+选项:
+  --env-file <path>   指定 .env 文件，验证前导入其中的变量（不覆盖已存在的）
+  --report <path>     生成 JSON 报告到指定路径
+  --sarif <path>      生成 SARIF 报告到指定路径
 """
 
 import os
 import sys
 import shutil
 import subprocess
-import json
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+
 
 
 def find_validator(language):
@@ -71,21 +75,63 @@ def detect_available():
     return available
 
 
-def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else "auto"
+def parse_args():
+    """解析 CLI 参数，返回 (mode, env_file, report_path, sarif_path)。"""
+    args = sys.argv[1:]
+    mode = "auto"
+    env_file = ""
+    report_path = ""
+    sarif_path = ""
 
-    if mode == "help" or mode == "--help" or mode == "-h":
-        print("env-validate CLI")
-        print("Usage: python scripts/env-validate.py [python|node|bash|go|rust|auto]")
-        print()
-        print("Modes:")
-        print("  auto    自动检测可用运行时，依次执行（默认）")
-        print("  python  运行 Python 验证器")
-        print("  node    运行 Node.js 验证器")
-        print("  bash    运行 Bash 验证器")
-        print("  go      运行 Go 验证器")
-        print("  rust    运行 Rust 验证器")
-        sys.exit(0)
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("help", "--help", "-h"):
+            print("env-validate CLI")
+            print("Usage: python scripts/env-validate.py [python|node|bash|go|rust|auto] [options]")
+            print()
+            print("Modes:")
+            print("  auto    自动检测可用运行时，依次执行（默认）")
+            print("  python  运行 Python 验证器")
+            print("  node    运行 Node.js 验证器")
+            print("  bash    运行 Bash 验证器")
+            print("  go      运行 Go 验证器")
+            print("  rust    运行 Rust 验证器")
+            print()
+            print("Options:")
+            print("  --env-file <path>   指定 .env 文件，验证前导入变量")
+            print("  --report <path>     生成 JSON 报告")
+            print("  --sarif <path>      生成 SARIF 报告")
+            sys.exit(0)
+        elif arg in ("python", "node", "bash", "go", "rust", "auto"):
+            mode = arg
+        elif arg == "--env-file":
+            i += 1
+            env_file = args[i] if i < len(args) else ""
+        elif arg == "--report":
+            i += 1
+            report_path = args[i] if i < len(args) else ""
+        elif arg == "--sarif":
+            i += 1
+            sarif_path = args[i] if i < len(args) else ""
+        else:
+            print(f"  ✗ Unknown argument: {arg}")
+            sys.exit(2)
+        i += 1
+
+    return mode, env_file, report_path, sarif_path
+
+
+def main():
+    mode, env_file, report_path, sarif_path = parse_args()
+
+    # 设置环境变量传递给子验证器
+    if env_file:
+        os.environ["ENV_VALIDATE_ENV_FILE"] = env_file
+    if report_path:
+        os.environ["ENV_VALIDATE_REPORT"] = report_path
+    if sarif_path:
+        os.environ["ENV_VALIDATE_SARIF"] = sarif_path
 
     if mode == "auto":
         available = detect_available()

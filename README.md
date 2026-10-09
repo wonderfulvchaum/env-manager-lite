@@ -43,6 +43,10 @@ LOG_LEVEL:info
 - `VAR=value` — 精确匹配，缺失或值不符均失败
 - `VAR:default` — 带默认值，缺失时自动注入
 
+**规则分层（v0.7）**：在项目根目录创建 `.env-required.d/` 子目录，其中每个 `*.conf` 文件按字母序加载，后加载的同名变量覆盖先加载的。适合按环境（dev/staging/prod）拆分规则。
+
+**`.env` 文件加载（v0.7）**：设置 `ENV_VALIDATE_ENV_FILE=/path/to/.env` 后，验证前自动导入该文件中的变量（不覆盖已存在的变量）。
+
 ### 3. 本地验证
 
 ```bash
@@ -100,7 +104,9 @@ docker run --rm env-validator help
 │   └── validate.rs         # Rust 验证器
 ├── scripts/
 │   └── env-validate.py    # CLI 入口（多语言自动检测）
-├── .env-required           # 验证规则配置
+├── .env-required           # 验证规则配置（主文件）
+├── .env-required.d/        # 分层规则目录（*.conf 按字母序加载）
+│   └── 01-dev.conf       # 开发环境规则示例
 ├── .env.example            # 环境变量模板
 ├── Dockerfile              # 多语言运行时容器
 ├── docker-compose.yml      # 本地开发编排
@@ -119,7 +125,10 @@ docker run --rm env-validator help
 - [x] 集成 Slack/Discord 通知（可选 secrets）
 - [x] SARIF 报告格式（GitHub Code Scanning 集成）
 - [x] 多语言自动检测 CLI（`scripts/env-validate.py`）
-- [ ] 规则文件继承/分层支持
+- [x] 规则文件分层（`.env-required.d/*.conf`）
+- [x] `.env` 文件自动加载（`ENV_VALIDATE_ENV_FILE`）
+- [ ] 规则文件继承/分层支持（YAML 格式规则文件）
+- [ ] 变量值模式校验（正则/类型检查）
 
 ## 🤝 贡献
 
