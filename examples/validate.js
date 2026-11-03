@@ -1,10 +1,14 @@
 /**
- * Env Manager Lite - Node.js Validator v0.7
+ * Env Manager Lite - Node.js Validator v0.8
  *
- * 规则文件 .env-required 三种条目类型：
+ * 规则文件 .env-required 四种条目类型：
  *   VAR            → 必填，缺失则失败
  *   VAR=expected   → 精确匹配
  *   VAR:default    → 带默认值，不存在时注入
+ *   VAR~pattern    → 正则校验（v0.8），支持内置快捷类型 int/float/bool/url/ip/uuid
+ *
+ * YAML 规则文件（v0.8）：
+ *   若存在 .env-required.yaml 则优先加载。
  *
  * 规则分层（v0.7）：
  *   .env-required.d/*.conf 按字母序追加/覆盖规则。
@@ -19,16 +23,48 @@
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const DEFAULT_RULES = {
   DB_HOST: { type: 'required' },
   API_KEY: { type: 'required' },
 };
 
+const BUILTIN_PATTERNS = {
+  int:   '^-?\\d+$',
+  float: '^-?\\d+(\\.\\d+)?$',
+  bool:  '^(true|false|1|0)$',
+  url:   '^https?://[^\\s/$?#]*\\.[^\\s]+$',
+  ip:    '^(\\d{1,3}\\.) {3}\\d{1,3}$',
+  uuid:  '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+};
+
+function resolvePattern(patternStr) {
+  return BUILTIN_PATTERNS[patternStr] || patternStr;
+}
+
+function checkPattern(value, patternStr) {
+  let regexStr = resolvePattern(patternStr);
+  // 剥离已有的锚点，避免 ^(...) 双重锚点导致匹配异常
+  if (regexStr.startsWith('^')) regexStr = regexStr.slice(1);
+  if (regexStr.endsWith('$')) regexStr = regexStr.slice(0, -1);
+  try {
+    const flags = /^(bool|url)$/i.test(patternStr) ? 'i' : '';
+    return new RegExp(`^${regexStr}$`, flags).test(value);
+  } catch {
+    return value.includes(patternStr);
+  }
+}
+
 function parseLine(line, rules) {
   line = line.trim();
   if (!line || line.startsWith('#')) return;
-  if (line.includes(':') && !line.includes('=')) {
+  // 优先级: ~ > : > = > bare
+  if (line.includes('~')) {
+    const [varName, pattern] = line.split('~', 2);
+    if (varName.trim()) {
+      rules[varName.trim()] = { type: 'pattern', pattern: pattern.trim() };
+    }
+  } else if (line.includes(':') && !line.includes('=')) {
     const [varName, defaultVal] = line.split(':');
     if (varName.trim()) {
       rules[varName.trim()] = { type: 'default', default: defaultVal.trim() };
@@ -45,13 +81,58 @@ function parseLine(line, rules) {
   }
 }
 
+function loadYamlRules(filePath, rules) {
+  let found = false;
+  let currentVar = null;
+  const content = fs.readFileSync(filePath, 'utf-8');
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    const trimmed = line.trim();
+    // VAR:  顶层键
+    if (line.endsWith(':') && !line.startsWith(' ') && !line.startsWith('\t')) {
+      currentVar = line.slice(0, -1).trim();
+      if (currentVar && !(currentVar in rules)) {
+        rules[currentVar] = { type: 'required' };
+      }
+      found = true;
+    } else if (currentVar && (line.startsWith('  ') || line.startsWith('\t'))) {
+      const stripped = line.trim();
+      if (stripped.includes(':')) {
+        const idx = stripped.indexOf(':');
+        const key = stripped.slice(0, idx).trim();
+        let val = stripped.slice(idx + 1).trim();
+        if ((val.startsWith("'") && val.endsWith("'")) || (val.startsWith('"') && val.endsWith('"'))) {
+          val = val.slice(1, -1);
+        }
+        if (!(currentVar in rules)) rules[currentVar] = { type: 'required' };
+        if (key === 'type') rules[currentVar].type = val;
+        else if (key === 'expected') rules[currentVar].expected = val;
+        else if (key === 'default') rules[currentVar].default = val;
+        else if (key === 'pattern') { rules[currentVar].pattern = val; rules[currentVar].type = 'pattern'; }
+      }
+    } else {
+      currentVar = null;
+    }
+  }
+  return found;
+}
+
 function parseRules() {
   const root = path.resolve(__dirname, '..');
+  const yamlPath = path.join(root, '.env-required.yaml');
   const configPath = path.join(root, '.env-required');
   const rulesDir = path.join(root, '.env-required.d');
 
   const rules = {};
   let found = false;
+  let source = 'default';
+
+  // YAML 优先
+  if (fs.existsSync(yamlPath)) {
+    found = loadYamlRules(yamlPath, rules);
+    source = '.env-required.yaml';
+  }
 
   if (fs.existsSync(configPath)) {
     const lines = fs.readFileSync(configPath, 'utf-8').split('\n');
@@ -61,6 +142,7 @@ function parseRules() {
       found = true;
       parseLine(line, rules);
     }
+    if (source === 'default') source = '.env-required';
   }
 
   // 分层目录
@@ -75,12 +157,19 @@ function parseRules() {
       for (const rawLine of content.split('\n')) {
         parseLine(rawLine, rules);
       }
+      // 也支持分层 .yaml
+      const yamlConf = path.join(rulesDir, file.replace('.conf', '.yaml'));
+      if (fs.existsSync(yamlConf)) {
+        loadYamlRules(yamlConf, rules);
+      }
       layerCount++;
     }
     if (layerCount > 0) found = true;
   }
 
-  if (!found) return { ...DEFAULT_RULES };
+  if (!found) {
+    return { ...DEFAULT_RULES, source };
+  }
   return rules;
 }
 
@@ -140,6 +229,20 @@ function validate(rules) {
         results.push({ var: varName, status: 'ok', value: current });
         console.log(`  ✓ Match: ${varName} = ${current}`);
       }
+    } else if (spec.type === 'pattern') {
+      const pattern = spec.pattern || '';
+      if (!current) {
+        errors.push({ var: varName, issue: 'missing' });
+        results.push({ var: varName, status: 'missing' });
+        console.log(`  ✗ Missing: ${varName} (pattern required: ${pattern})`);
+      } else if (!checkPattern(current, pattern)) {
+        errors.push({ var: varName, issue: 'pattern_fail', pattern, got: current });
+        results.push({ var: varName, status: 'pattern_fail' });
+        console.log(`  ✗ Pattern fail: ${varName} (pattern '${pattern}', got '${current}')`);
+      } else {
+        results.push({ var: varName, status: 'ok', value: current });
+        console.log(`  ✓ Pattern ok: ${varName} matches '${pattern}'`);
+      }
     } else {
       if (!current) {
         errors.push({ var: varName, issue: 'missing' });
@@ -197,15 +300,26 @@ function writeSarif(results, errors) {
         shortDescription: { text: 'Environment variable value does not match expected' },
         defaultConfiguration: { level: 'error' },
       },
+      {
+        id: 'env-pattern-fail',
+        name: 'EnvironmentVariablePatternFail',
+        shortDescription: { text: 'Environment variable does not match required pattern' },
+        defaultConfiguration: { level: 'error' },
+      },
     ];
 
     const sarifErrors = errors.map((e) => {
-      const ruleId = e.issue === 'missing' ? 'env-missing' : 'env-mismatch';
+      let ruleId;
       let msg;
       if (e.issue === 'missing') {
+        ruleId = 'env-missing';
         msg = `Environment variable '${e.var}' is missing`;
-      } else {
+      } else if (e.issue === 'mismatch') {
+        ruleId = 'env-mismatch';
         msg = `Environment variable '${e.var}' expected '${e.expected || ''}' but got '${e.got || ''}'`;
+      } else {
+        ruleId = 'env-pattern-fail';
+        msg = `Environment variable '${e.var}' does not match pattern '${e.pattern || ''}'`;
       }
       return {
         ruleId,
@@ -271,7 +385,8 @@ function main() {
     `  Checking ${Object.keys(rules).length} rule(s): ` +
     `${typeCounts.required || 0} required, ` +
     `${typeCounts.match || 0} match, ` +
-    `${typeCounts.default || 0} default...\n`
+    `${typeCounts.default || 0} default, ` +
+    `${typeCounts.pattern || 0} pattern...\n`
   );
 
   // 3. 执行校验
@@ -286,8 +401,10 @@ function main() {
     console.log(`  ✗ Failed: ${errors.length} issue(s).`);
     const missing = errors.filter((e) => e.issue === 'missing').map((e) => e.var);
     const mismatched = errors.filter((e) => e.issue === 'mismatch').map((e) => e.var);
+    const patternFailed = errors.filter((e) => e.issue === 'pattern_fail').map((e) => e.var);
     if (missing.length) console.log(`    Missing: ${missing.join(', ')}`);
     if (mismatched.length) console.log(`    Mismatch: ${mismatched.join(', ')}`);
+    if (patternFailed.length) console.log(`    Pattern fail: ${patternFailed.join(', ')}`);
     process.exit(1);
   } else {
     console.log('  ✓ All checks passed!');

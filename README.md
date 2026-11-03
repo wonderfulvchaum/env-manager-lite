@@ -9,7 +9,7 @@
 
 - 🚀 **零依赖部署**：基于 GitHub Actions，无需额外服务器
 - 🌐 **五语言支持**：Bash / Python / Node.js / Go / Rust 验证脚本
-- ⚙️ **可配置规则**：通过 `.env-required` 文件定义必填变量，支持 `VAR=value` 精确匹配
+- ⚙️ **可配置规则**：通过 `.env-required` 文件定义必填变量，支持 `VAR=value` 精确匹配、`VAR:default` 默认值、`VAR~pattern` 正则/类型校验（v0.8）
 - 🔒 **安全优先**：GitHub Secrets 管理敏感信息，验证输出自动脱敏
 - 🐳 **Docker 容器化**：多语言运行时一体化镜像，按需选择验证模式
 - 📝 **模板化**：提供 `.env.example`，方便团队协作
@@ -38,14 +38,30 @@ DB_PORT=5432
 LOG_LEVEL:info
 ```
 
-支持 `#` 注释和三种条目类型：
+支持 `#` 注释和四种条目类型：
 - `VAR` — 必填，缺失即失败
 - `VAR=value` — 精确匹配，缺失或值不符均失败
 - `VAR:default` — 带默认值，缺失时自动注入
+- `VAR~pattern` — 值必须匹配正则或内置类型（v0.8）
+
+**内置类型快捷校验（v0.8）**：`VAR~int` / `VAR~float` / `VAR~bool` / `VAR~url` / `VAR~ip` / `VAR~uuid`，也可写自定义正则如 `VAR~^[A-Z0-9_]+$`。
 
 **规则分层（v0.7）**：在项目根目录创建 `.env-required.d/` 子目录，其中每个 `*.conf` 文件按字母序加载，后加载的同名变量覆盖先加载的。适合按环境（dev/staging/prod）拆分规则。
 
 **`.env` 文件加载（v0.7）**：设置 `ENV_VALIDATE_ENV_FILE=/path/to/.env` 后，验证前自动导入该文件中的变量（不覆盖已存在的变量）。
+
+**YAML 规则文件（v0.8）**：在根目录创建 `.env-required.yaml` 可替代或补充 `.env-required`。各验证器使用简化 YAML 解析（无外部依赖），支持两种写法：
+
+```yaml
+# 单行简写
+DB_HOST: required
+API_KEY: "pattern~^[a-zA-Z0-9_-]{4,}$"
+
+# 嵌套写法
+LOG_LEVEL:
+  type: default
+  value: "info"
+```
 
 ### 3. 本地验证
 
@@ -105,6 +121,7 @@ docker run --rm env-validator help
 ├── scripts/
 │   └── env-validate.py    # CLI 入口（多语言自动检测）
 ├── .env-required           # 验证规则配置（主文件）
+├── .env-required.yaml      # YAML 规则文件（v0.8，可选）
 ├── .env-required.d/        # 分层规则目录（*.conf 按字母序加载）
 │   └── 01-dev.conf       # 开发环境规则示例
 ├── .env.example            # 环境变量模板
@@ -127,8 +144,8 @@ docker run --rm env-validator help
 - [x] 多语言自动检测 CLI（`scripts/env-validate.py`）
 - [x] 规则文件分层（`.env-required.d/*.conf`）
 - [x] `.env` 文件自动加载（`ENV_VALIDATE_ENV_FILE`）
-- [ ] 规则文件继承/分层支持（YAML 格式规则文件）
-- [ ] 变量值模式校验（正则/类型检查）
+- [x] 变量值模式校验（`VAR~regex` 正则/类型检查，v0.8）
+- [x] YAML 格式规则文件（`.env-required.yaml`，v0.8）
 
 ## 🤝 贡献
 

@@ -1,9 +1,10 @@
 //go:build ignore
 // +build ignore
 
-// Env Manager Lite - Go Validator v0.7
-// 三种规则类型: required / match / default
+// Env Manager Lite - Go Validator v0.8
+// 四种规则类型: required / match / default / pattern
 // 规则分层: .env-required.d/*.conf 按字母序追加/覆盖
+// YAML 规则文件: .env-required.yaml（简化解析）
 // .env 文件加载: ENV_VALIDATE_ENV_FILE
 // JSON 报告: 设置 ENV_VALIDATE_REPORT 后生成
 package main
@@ -13,6 +14,8 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -20,6 +23,7 @@ type Rule struct {
 	Type     string `json:"type"`
 	Expected string `json:"expected,omitempty"`
 	Default  string `json:"default,omitempty"`
+	Pattern  string `json:"pattern,omitempty"`
 }
 
 type RuleResult struct {
@@ -33,6 +37,7 @@ type RuleError struct {
 	Issue    string `json:"issue"`
 	Expected string `json:"expected,omitempty"`
 	Got      string `json:"got,omitempty"`
+	Pattern  string `json:"pattern,omitempty"`
 }
 
 type Report struct {
@@ -47,6 +52,40 @@ type Report struct {
 	Errors      []RuleError  `json:"errors"`
 }
 
+// 内置快捷模式（v0.8）
+var BuiltinPatterns = map[string]string{
+	"int":   "^[0-9]+$",
+	"float": "^[0-9]+(\\.[0-9]+)?$",
+	"bool":  "^(true|false|1|0)$",
+	"url":   "^https?://[^\\s/$?#]*\\.[^\\s]+$",
+	"ip":    "^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$",
+	"uuid":  "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+}
+
+func resolvePattern(p string) string {
+	if r, ok := BuiltinPatterns[p]; ok {
+		return r
+	}
+	return p
+}
+
+func checkPattern(value, pattern string) bool {
+	re := resolvePattern(pattern)
+	// 剥离用户手写的锚点避免双重锚点
+	re = strings.TrimPrefix(re, "^")
+	re = strings.TrimSuffix(re, "$")
+	// Go regex: 用 (?i) 内联标志实现忽略大小写
+	if pattern == "bool" || pattern == "url" {
+		re = "(?i)" + re
+	}
+	re = "^" + re + "$"
+	matched, err := regexp.MatchString(re, value)
+	if err != nil {
+		return strings.Contains(value, pattern)
+	}
+	return matched
+}
+
 func main() {
 	isCI := os.Getenv("GITHUB_ACTIONS") == "true"
 	mode := "local"
@@ -55,7 +94,7 @@ func main() {
 	}
 
 	fmt.Println("==============================================")
-	fmt.Println("  Env Manager Lite - Go Validator v0.7")
+	fmt.Println("  Env Manager Lite - Go Validator v0.8")
 	fmt.Printf("  Mode: %s\n", strings.ToUpper(mode))
 	fmt.Println("==============================================")
 
@@ -92,8 +131,8 @@ func main() {
 	for _, r := range rules {
 		typeCounts[r.Type]++
 	}
-	fmt.Printf("  Checking %d rule(s): %d required, %d match, %d default...\n\n",
-		len(rules), typeCounts["required"], typeCounts["match"], typeCounts["default"])
+	fmt.Printf("  Checking %d rule(s): %d required, %d match, %d default, %d pattern...\n\n",
+		len(rules), typeCounts["required"], typeCounts["match"], typeCounts["default"], typeCounts["pattern"])
 
 	results, errors := validate(rules)
 	writeReport(rules, results, errors, mode)
@@ -101,12 +140,15 @@ func main() {
 	fmt.Println()
 	if len(errors) > 0 {
 		fmt.Printf("  ✗ Failed: %d issue(s).\n", len(errors))
-		var missing, mismatched []string
+		var missing, mismatched, patternFailed []string
 		for _, e := range errors {
-			if e.Issue == "missing" {
+			switch e.Issue {
+			case "missing":
 				missing = append(missing, e.Var)
-			} else {
+			case "mismatch":
 				mismatched = append(mismatched, e.Var)
+			case "pattern_fail":
+				patternFailed = append(patternFailed, e.Var)
 			}
 		}
 		if len(missing) > 0 {
@@ -115,15 +157,15 @@ func main() {
 		if len(mismatched) > 0 {
 			fmt.Printf("    Mismatch: %s\n", strings.Join(mismatched, ", "))
 		}
+		if len(patternFailed) > 0 {
+			fmt.Printf("    Pattern fail: %s\n", strings.Join(patternFailed, ", "))
+		}
 		os.Exit(1)
 	}
 	fmt.Println("  ✓ All checks passed!")
 }
 
-// loadRules 解析 .env-required + .env-required.d/*.conf（项目根目录）
-// VAR           → required
-// VAR=expected  → match
-// VAR:default   → default（无 = 时）
+// loadRules 解析 .env-required + .env-required.d/*.conf + .env-required.yaml
 func loadRules() map[string]Rule {
 	root := findRoot()
 
@@ -134,6 +176,35 @@ func loadRules() map[string]Rule {
 
 	rules := map[string]Rule{}
 	found := false
+
+	// YAML 文件（简化解析）
+	yamlPath := root + "/.env-required.yaml"
+	if data, err := os.ReadFile(yamlPath); err == nil {
+		for _, raw := range strings.Split(string(data), "\n") {
+			line := strings.TrimSpace(raw)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			// VAR: type
+			if strings.Contains(line, ":") && !strings.HasPrefix(line, " ") {
+				parts := strings.SplitN(line, ":", 2)
+				varName := strings.TrimSpace(parts[0])
+				val := strings.TrimSpace(parts[1])
+				val = strings.Trim(val, `'"`)
+				if varName != "" {
+					rule := Rule{Type: "required"}
+					switch val {
+					case "match", "default", "pattern", "required":
+						rule.Type = val
+					}
+					if rule.Type == "required" {
+						rules[varName] = rule
+						found = true
+					}
+				}
+			}
+		}
+	}
 
 	// 主文件
 	configPath := root + "/.env-required"
@@ -149,11 +220,18 @@ func loadRules() map[string]Rule {
 	// 分层目录
 	rulesDir := root + "/.env-required.d"
 	if dir, err := os.ReadDir(rulesDir); err == nil {
+		var names []string
 		for _, entry := range dir {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".conf") {
+			if entry.IsDir() {
 				continue
 			}
-			data, err := os.ReadFile(path.Join(rulesDir, entry.Name()))
+			if strings.HasSuffix(entry.Name(), ".conf") || strings.HasSuffix(entry.Name(), ".yaml") {
+				names = append(names, entry.Name())
+			}
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			data, err := os.ReadFile(path.Join(rulesDir, name))
 			if err != nil {
 				continue
 			}
@@ -173,57 +251,63 @@ func loadRules() map[string]Rule {
 }
 
 // parseRuleLine 解析单行，成功时返回 true
+// 优先级: ~ > : > = > bare
 func parseRuleLine(raw string) (string, Rule, bool) {
 	line := strings.TrimSpace(raw)
 	if line == "" || strings.HasPrefix(line, "#") {
 		return "", Rule{}, false
 	}
-	// 优先级: 有 : 且无 = → default; 有 = → match; 否则 → required
+	// ~ 优先: pattern
+	if strings.Contains(line, "~") {
+		parts := strings.SplitN(line, "~", 2)
+		varName := strings.TrimSpace(parts[0])
+		pattern := ""
+		if len(parts) > 1 {
+			pattern = strings.TrimSpace(parts[1])
+		}
+		if varName != "" {
+			return varName, Rule{Type: "pattern", Pattern: pattern}, true
+		}
+	}
+	// : 且无 = → default
 	if strings.Contains(line, ":") && !strings.Contains(line, "=") {
 		parts := strings.SplitN(line, ":", 2)
-		vars := strings.TrimSpace(parts[0])
-		if vars == "" {
+		varName := strings.TrimSpace(parts[0])
+		if varName == "" {
 			return "", Rule{}, false
 		}
 		defaultVal := ""
 		if len(parts) > 1 {
 			defaultVal = strings.TrimSpace(parts[1])
 		}
-		return vars, Rule{Type: "default", Default: defaultVal}, true
-	} else if strings.Contains(line, "=") {
+		return varName, Rule{Type: "default", Default: defaultVal}, true
+	}
+	// = → match
+	if strings.Contains(line, "=") {
 		parts := strings.SplitN(line, "=", 2)
-		vars := strings.TrimSpace(parts[0])
-		if vars == "" {
+		varName := strings.TrimSpace(parts[0])
+		if varName == "" {
 			return "", Rule{}, false
 		}
 		expected := ""
 		if len(parts) > 1 {
 			expected = strings.TrimSpace(parts[1])
 		}
-		return vars, Rule{Type: "match", Expected: expected}, true
-	} else {
-		return line, Rule{Type: "required"}, true
+		return varName, Rule{Type: "match", Expected: expected}, true
 	}
+	// bare → required
+	return line, Rule{Type: "required"}, true
 }
-
 
 func validate(rules map[string]Rule) ([]RuleResult, []RuleError) {
 	var results []RuleResult
 	var errors []RuleError
 
-	// 稳定顺序: 按 map 迭代（Go 1.12+ map 迭代顺序随机，用切片排序）
 	keys := make([]string, 0, len(rules))
 	for k := range rules {
 		keys = append(keys, k)
 	}
-	// 简单排序保持输出稳定
-	for i := 0; i < len(keys); i++ {
-		for j := i + 1; j < len(keys); j++ {
-			if keys[i] > keys[j] {
-				keys[i], keys[j] = keys[j], keys[i]
-			}
-		}
-	}
+	sort.Strings(keys)
 
 	for _, varName := range keys {
 		spec := rules[varName]
@@ -232,7 +316,6 @@ func validate(rules map[string]Rule) ([]RuleResult, []RuleError) {
 		switch spec.Type {
 		case "default":
 			if current == "" {
-				// 注入默认值
 				os.Setenv(varName, spec.Default)
 				current = spec.Default
 				results = append(results, RuleResult{Var: varName, Status: "defaulted", Value: current})
@@ -254,6 +337,20 @@ func validate(rules map[string]Rule) ([]RuleResult, []RuleError) {
 			} else {
 				results = append(results, RuleResult{Var: varName, Status: "ok", Value: current})
 				fmt.Printf("  ✓ Match: %s = %s\n", varName, current)
+			}
+
+		case "pattern":
+			if current == "" {
+				errors = append(errors, RuleError{Var: varName, Issue: "missing"})
+				results = append(results, RuleResult{Var: varName, Status: "missing"})
+				fmt.Printf("  ✗ Missing: %s (pattern required: %s)\n", varName, spec.Pattern)
+			} else if !checkPattern(current, spec.Pattern) {
+				errors = append(errors, RuleError{Var: varName, Issue: "pattern_fail", Pattern: spec.Pattern, Got: current})
+				results = append(results, RuleResult{Var: varName, Status: "pattern_fail"})
+				fmt.Printf("  ✗ Pattern fail: %s (pattern '%s', got '%s')\n", varName, spec.Pattern, current)
+			} else {
+				results = append(results, RuleResult{Var: varName, Status: "ok", Value: current})
+				fmt.Printf("  ✓ Pattern ok: %s matches '%s'\n", varName, spec.Pattern)
 			}
 
 		default: // required
@@ -280,7 +377,7 @@ func writeReport(rules map[string]Rule, results []RuleResult, errors []RuleError
 	passed := len(errors) == 0
 	report := Report{
 		Tool:        "env-manager-lite",
-		Version:     "0.7.0",
+		Version:     "0.8.0",
 		Mode:        mode,
 		Passed:      passed,
 		Total:       len(results),
@@ -307,7 +404,6 @@ func mask(v string) string {
 }
 
 func findRoot() string {
-	// 向上查找 .env-required 或 git 目录
 	dir, _ := os.Getwd()
 	for i := 0; i < 5; i++ {
 		if _, err := os.Stat(dir + "/.env-required"); err == nil {

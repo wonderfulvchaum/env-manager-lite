@@ -1,10 +1,11 @@
 #!/bin/bash
-# Env Manager Lite - Bash Validator v0.7
+# Env Manager Lite - Bash Validator v0.8
 #
-# .env-required 三种条目：
+# .env-required 四种条目：
 #   VAR            必填（缺失则失败）
 #   VAR=expected   精确匹配
 #   VAR:default    带默认值（Bash 不做注入，仅报告；可选存在性检查）
+#   VAR~pattern    正则校验（v0.8），值必须匹配 pattern
 #
 # 规则分层（v0.7）：
 #   .env-required.d/*.conf 按字母序追加/覆盖规则
@@ -14,7 +15,7 @@
 
 set -uo pipefail
 
-VERSION="0.7.0"
+VERSION="0.8.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -49,10 +50,11 @@ fi
 CONFIG_FILE="$ROOT_DIR/.env-required"
 RULES_DIR="$ROOT_DIR/.env-required.d"
 
-# 解析规则文件到三个数组
+# 解析规则文件到四个数组
 REQUIRED_LINES=()
 MATCH_LINES=()
 DEFAULT_LINES=()
+PATTERN_LINES=()
 
 _parse_rules_file() {
   local file="$1"
@@ -60,7 +62,10 @@ _parse_rules_file() {
   while IFS= read -r line; do
     line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [[ -z "$line" || "$line" =~ ^# ]] && continue
-    if [[ "$line" == *:* ]] && [[ "$line" != *=* ]]; then
+    # 优先级: ~ > : > = > bare
+    if [[ "$line" == *~* ]]; then
+      PATTERN_LINES+=("$line")
+    elif [[ "$line" == *:* ]] && [[ "$line" != *=* ]]; then
       DEFAULT_LINES+=("$line")
     elif [[ "$line" == *=* ]]; then
       MATCH_LINES+=("$line")
@@ -72,6 +77,30 @@ _parse_rules_file() {
 
 # 主文件
 _parse_rules_file "$CONFIG_FILE"
+
+# YAML 文件: Bash 仅支持顶层 VAR: type 单行简写（完整嵌套 YAML 需 Python/Node）
+YAML_FILE="$ROOT_DIR/.env-required.yaml"
+if [[ -f "$YAML_FILE" ]]; then
+  while IFS= read -r _yaml_line; do
+    # 跳过空行、注释、缩进行（嵌套子键交给 Python/Node 处理）
+    [[ "$_yaml_line" =~ ^[[:space:]] || "$_yaml_line" =~ ^[[:space:]]*# ]] && continue
+    _ystripped="$(echo "$_yaml_line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -z "$_ystripped" ]] && continue
+    if [[ "$_ystripped" == *:* ]]; then
+      _yv="$(echo "${_ystripped%%:*}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      _yt="$(echo "${_ystripped#*:}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed "s/^['\"]//;s/['\"]\$//")"
+      # 变量名必须是合法标识符（过滤 type/pattern/expected/default 等 YAML 子键）
+      [[ "$_yv" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
+      case "$_yt" in
+        required)  REQUIRED_LINES+=("$_yv") ;;
+        default)   DEFAULT_LINES+=("$_yv:$_yt") ;;
+        pattern)   PATTERN_LINES+=("$_yv~$_yt") ;;
+        match)     MATCH_LINES+=("$_yv=$_yt") ;;
+        "")        REQUIRED_LINES+=("$_yv") ;;
+      esac
+    fi
+  done < "$YAML_FILE"
+fi
 
 # 分层目录
 LAYER_COUNT=0
@@ -114,7 +143,7 @@ for _n in "${!_dedup_def[@]}"; do
 done
 
 # 默认值（无任何规则时）
-if [[ ${#REQUIRED_LINES[@]} -eq 0 && ${#MATCH_LINES[@]} -eq 0 && ${#DEFAULT_LINES[@]} -eq 0 ]]; then
+if [[ ${#REQUIRED_LINES[@]} -eq 0 && ${#MATCH_LINES[@]} -eq 0 && ${#DEFAULT_LINES[@]} -eq 0 && ${#PATTERN_LINES[@]} -eq 0 ]]; then
   REQUIRED_LINES=("DB_HOST" "API_KEY")
 fi
 
@@ -123,7 +152,7 @@ if [[ $LAYER_COUNT -gt 0 ]]; then
   LAYER_INFO=" ($LAYER_COUNT layer file(s) in .env-required.d)"
 fi
 
-echo "  Checking ${#REQUIRED_LINES[@]} required, ${#MATCH_LINES[@]} match, ${#DEFAULT_LINES[@]} default${LAYER_INFO}..."
+echo "  Checking ${#REQUIRED_LINES[@]} required, ${#MATCH_LINES[@]} match, ${#DEFAULT_LINES[@]} default, ${#PATTERN_LINES[@]} pattern${LAYER_INFO}..."
 echo ""
 
 ERRORS=0
@@ -131,6 +160,8 @@ ERRORS=0
 # 必填
 for var in "${REQUIRED_LINES[@]:-}"; do
   [[ -z "$var" ]] && continue
+  # 跳过含非法变量名的行（只接受纯环境变量名）
+  [[ "$var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
   val="${!var:-}"
   if [[ -z "$val" ]]; then
     echo "  ✗ Missing: $var"
@@ -169,6 +200,39 @@ for pair in "${DEFAULT_LINES[@]:-}"; do
     echo "  ○ Optional: $var (not set, default: $default_val)"
   else
     echo "  ✓ Found: $var = $val"
+  fi
+done
+
+# 正则校验（v0.8）
+# 内置快捷类型用 case 解析（避免 declare -A 在 sh/dash 下不可用）
+for pair in "${PATTERN_LINES[@]:-}"; do
+  [[ -z "$pair" ]] && continue
+  var="${pair%%~*}"
+  pattern="${pair#*~}"
+
+  case "$pattern" in
+    int)   resolved='[0-9]+' ;;
+    float) resolved='[0-9]+(\.[0-9]+)?' ;;
+    bool)  resolved='(true|false|1|0)' ;;
+    url)   resolved='https?://[^/ ]+\..+' ;;
+    ip)    resolved='[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' ;;
+    *)
+      # 用户自定义正则: 剥离锚点，去掉外层括号
+      resolved="$pattern"
+      resolved="${resolved#\^}"
+      resolved="${resolved%\$}"
+      ;;
+  esac
+
+  actual="${!var:-}"
+  if [[ -z "$actual" ]]; then
+    echo "  ✗ Missing: $var (pattern required: $pattern)"
+    ERRORS=$((ERRORS + 1))
+  elif printf '%s' "$actual" | grep -qE "^(${resolved})\$"; then
+    echo "  ✓ Pattern ok: $var matches '$pattern'"
+  else
+    echo "  ✗ Pattern fail: $var (pattern '$pattern', got '$actual')"
+    ERRORS=$((ERRORS + 1))
   fi
 done
 
