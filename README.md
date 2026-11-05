@@ -133,6 +133,7 @@ docker run --rm env-validator help
 
 ## 🗺️ 路线图
 
+**已完成**
 - [x] 基础 CI/CD 工作流
 - [x] 多语言支持 (Bash, Python, Node.js, Go, Rust)
 - [x] Docker 容器化支持
@@ -146,6 +147,17 @@ docker run --rm env-validator help
 - [x] `.env` 文件自动加载（`ENV_VALIDATE_ENV_FILE`）
 - [x] 变量值模式校验（`VAR~regex` 正则/类型检查，v0.8）
 - [x] YAML 格式规则文件（`.env-required.yaml`，v0.8）
+
+**规划中（v0.9+）**
+- [ ] 完整 YAML 规则文件（支持 `required: true` / `optional: true` / `enforce: true` 等高级字段，替代简化解析）
+- [ ] 跨变量校验（如 `DB_PORT~^[0-9]+$` 且 `DB_HOST` 非空时 `DB_PORT` 必须匹配）
+- [ ] 变量分组与标签（如 `tags: [db, prod]` 按标签批量启停规则）
+- [ ] 审计日志（记录每次校验结果、时间戳、触发源）
+- [ ] 与 Kubernetes / Terraform 集成（生成 sidecar 容器或 provider 变量校验）
+- [ ] 规则模板库（常见场景预设：数据库、API 密钥、CI/CD 等）
+- [ ] 本地 lint 插件（VS Code / Neovim 实时提示缺失变量）
+- [ ] 多规则文件继承（`extends: .env-required.base.yaml`）
+- [ ] 性能优化（大规模变量集下并行校验）
 
 ## 🤝 贡献
 
